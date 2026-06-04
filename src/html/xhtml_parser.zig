@@ -11,8 +11,8 @@ pub const Node = struct {
     pub fn create(allocator: std.mem.Allocator) !*Node {
         const node = try allocator.create(Node);
         node.* = .{
-            .children = .{},
-            .attributes = .{},
+            .children = .empty,
+            .attributes = .empty,
         };
         return node;
     }
@@ -31,7 +31,7 @@ pub fn parse(allocator: std.mem.Allocator, tokens: []Token) !*Node {
     const root = try Node.create(allocator);
     errdefer root.destroy(allocator);
 
-    var stack: std.ArrayList(*Node) = .{};
+    var stack: std.ArrayList(*Node) = .empty;
     defer stack.deinit(allocator);
 
     try stack.ensureTotalCapacity(allocator, 32);

@@ -10,7 +10,7 @@ pub const Token = union(enum) {
 };
 
 pub fn tokenize(allocator: std.mem.Allocator, buffer: []const u8) ![]Token {
-    var list: std.ArrayList(Token) = .{};
+    var list: std.ArrayList(Token) = .empty;
     try list.ensureTotalCapacity(allocator, buffer.len / 20);
 
     var i: usize = 0;

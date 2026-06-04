@@ -5,13 +5,21 @@ const sdl3 = @import("reader/sdl3.zig");
 
 const EpubParser = fileReader.EpubParser;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var args_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    defer args_iter.deinit();
+
+    var args_list: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (args_list.items) |a| allocator.free(a);
+        args_list.deinit(allocator);
+    }
+    while (args_iter.next()) |a| {
+        try args_list.append(allocator, try allocator.dupe(u8, a));
+    }
+    const args = args_list.items;
 
     // if (args.len < 2) {
     //     std.debug.print("Usage: {s} <epub_file> [options]\n", .{args[0]});
@@ -137,5 +145,5 @@ pub fn main() !void {
     // }
 
     const epub_file = if (args.len > 1) args[1] else null;
-    try sdl3.example(allocator, epub_file);
+    try sdl3.example(allocator, init.io, init.environ_map, epub_file);
 }

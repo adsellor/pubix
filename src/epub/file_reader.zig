@@ -53,8 +53,10 @@ pub const Chapter = struct {
     html_content: []const u8,
     filename: []const u8,
     chapter_number: usize,
+    owned: bool = true,
 
     pub fn deinit(self: *Chapter, allocator: std.mem.Allocator) void {
+        if (!self.owned) return;
         allocator.free(self.title);
         allocator.free(self.html_content);
         allocator.free(self.filename);
@@ -88,10 +90,10 @@ pub const Epub = struct {
         return .{
             .allocator = allocator,
             .metadata = .{},
-            .manifest = std.ArrayList(ManifestItem){},
-            .spine = std.ArrayList(SpineItem){},
-            .files = std.ArrayList(ExtractedFile){},
-            .pages = std.ArrayList(Page){},
+            .manifest = .empty,
+            .spine = .empty,
+            .files = .empty,
+            .pages = .empty,
         };
     }
 
@@ -133,7 +135,7 @@ pub const Epub = struct {
     }
 
     pub fn getChapterFiles(self: *Epub) !std.ArrayList(ExtractedFile) {
-        var chapters = std.ArrayList(ExtractedFile){};
+        var chapters: std.ArrayList(ExtractedFile) = .empty;
 
         for (self.files.items) |file| {
             if (std.mem.endsWith(u8, file.filename, ".html") or
@@ -157,7 +159,7 @@ pub const Epub = struct {
     }
 
     pub fn getImages(self: *Epub) !std.ArrayList(ExtractedFile) {
-        var images = std.ArrayList(ExtractedFile){};
+        var images: std.ArrayList(ExtractedFile) = .empty;
 
         for (self.files.items) |file| {
             if (std.mem.endsWith(u8, file.filename, ".png") or
@@ -174,7 +176,7 @@ pub const Epub = struct {
     }
 
     pub fn getOrderedChapters(self: *Epub) !std.ArrayList(ExtractedFile) {
-        var chapters = std.ArrayList(ExtractedFile){};
+        var chapters: std.ArrayList(ExtractedFile) = .empty;
 
         for (self.spine.items) |spine_item| {
             for (self.manifest.items) |manifest_item| {
@@ -222,7 +224,7 @@ pub const Epub = struct {
     }
 
     pub fn getChapters(self: *Epub) !std.ArrayList(Chapter) {
-        var chapters = std.ArrayList(Chapter){};
+        var chapters: std.ArrayList(Chapter) = .empty;
 
         var ordered_files = try self.getOrderedChapters();
         defer ordered_files.deinit(self.allocator);
@@ -290,7 +292,7 @@ pub const Epub = struct {
     }
 
     pub fn getPages(self: *Epub, words_per_page: usize) !std.ArrayList(Page) {
-        var pages = std.ArrayList(Page){};
+        var pages: std.ArrayList(Page) = .empty;
 
         var chapters = try self.getChapters();
         defer {
@@ -367,7 +369,7 @@ pub const Epub = struct {
     }
 
     fn extractTextFromHtml(self: *Epub, html: []const u8) ![]u8 {
-        var result = std.ArrayList(u8){};
+        var result: std.ArrayList(u8) = .empty;
         var i: usize = 0;
         var in_tag = false;
 
@@ -414,7 +416,7 @@ pub const Epub = struct {
     }
 
     fn splitIntoWords(self: *Epub, text: []const u8) !std.ArrayList([]u8) {
-        var words = std.ArrayList([]u8){};
+        var words: std.ArrayList([]u8) = .empty;
         var word_start: ?usize = null;
 
         for (text, 0..) |char, i| {
@@ -525,7 +527,7 @@ pub const Epub = struct {
     }
 
     fn generateTitleFromFilename(self: *Epub, filename: []const u8) ![]const u8 {
-        const basename = std.fs.path.basename(filename);
+        const basename = std.Io.Dir.path.basename(filename);
         const name_without_ext = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_pos|
             basename[0..dot_pos]
         else
@@ -546,9 +548,10 @@ pub const Epub = struct {
 
 pub const EpubParser = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
 
-    pub fn init(allocator: std.mem.Allocator) EpubParser {
-        return .{ .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) EpubParser {
+        return .{ .allocator = allocator, .io = io };
     }
 
     pub fn parseEpub(self: *EpubParser, filepath: []const u8) !Epub {
@@ -583,15 +586,16 @@ pub const EpubParser = struct {
     }
 
     pub fn extractEpub(self: *EpubParser, filepath: []const u8) !std.ArrayList(ExtractedFile) {
-        var file = try std.fs.cwd().openFile(filepath, .{});
-        defer file.close();
+        const io = self.io;
+        const file = try std.Io.Dir.cwd().openFile(io, filepath, .{});
+        defer file.close(io);
 
         var file_buffer: [8192]u8 = undefined;
-        var file_reader = file.reader(&file_buffer);
+        var file_reader = std.Io.File.Reader.init(file, io, &file_buffer);
         var iter = try zip.Iterator.init(&file_reader);
 
-        var extracted_files = std.ArrayList(ExtractedFile){};
-        var filename_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var extracted_files: std.ArrayList(ExtractedFile) = .empty;
+        var filename_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
 
         while (try iter.next()) |entry| {
             if (entry.filename_len > filename_buf.len) {
@@ -600,14 +604,14 @@ pub const EpubParser = struct {
             }
 
             const filename = filename_buf[0..entry.filename_len];
-            try file.seekTo(entry.header_zip_offset + @sizeOf(zip.CentralDirectoryFileHeader));
-            _ = try file.readAll(filename);
+            try file_reader.seekTo(entry.header_zip_offset + @sizeOf(zip.CentralDirectoryFileHeader));
+            try file_reader.interface.readSliceAll(filename);
 
             if (filename[filename.len - 1] == '/') {
                 continue;
             }
 
-            const content = try self.extractEntryContent(&file, entry);
+            const content = try self.extractEntryContent(&file_reader, entry);
             const filename_copy = try self.allocator.dupe(u8, filename);
 
             try extracted_files.append(self.allocator, .{
@@ -619,12 +623,12 @@ pub const EpubParser = struct {
         return extracted_files;
     }
 
-    fn extractEntryContent(self: *EpubParser, file: *std.fs.File, entry: zip.Iterator.Entry) ![]u8 {
+    fn extractEntryContent(self: *EpubParser, file_reader: *std.Io.File.Reader, entry: zip.Iterator.Entry) ![]u8 {
         const local_header_offset = entry.file_offset;
-        try file.seekTo(local_header_offset);
+        try file_reader.seekTo(local_header_offset);
 
         var header_bytes: [@sizeOf(zip.LocalFileHeader)]u8 = undefined;
-        _ = try file.readAll(&header_bytes);
+        try file_reader.interface.readSliceAll(&header_bytes);
         const local_header: *align(1) zip.LocalFileHeader = @ptrCast(&header_bytes);
         if (!is_le) std.mem.byteSwapAllFields(zip.LocalFileHeader, local_header);
         if (!std.mem.eql(u8, &local_header.signature, &zip.local_file_header_sig)) {
@@ -636,19 +640,19 @@ pub const EpubParser = struct {
             local_header.filename_len +
             local_header.extra_len;
 
-        try file.seekTo(file_data_offset);
+        try file_reader.seekTo(file_data_offset);
 
         const uncompressed_data = try self.allocator.alloc(u8, entry.uncompressed_size);
         errdefer self.allocator.free(uncompressed_data);
 
         switch (entry.compression_method) {
             .store => {
-                _ = try file.readAll(uncompressed_data);
+                try file_reader.interface.readSliceAll(uncompressed_data);
             },
             .deflate => {
                 const compressed_data = try self.allocator.alloc(u8, entry.compressed_size);
                 defer self.allocator.free(compressed_data);
-                _ = try file.readAll(compressed_data);
+                try file_reader.interface.readSliceAll(compressed_data);
 
                 var io_reader = std.Io.Reader.fixed(compressed_data);
 

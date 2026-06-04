@@ -29,7 +29,7 @@
     flake-utils.lib.eachSystem systems (
       system: let
         pkgs = import nixpkgs {inherit overlays system;};
-        zig = inputs.zig-overlay.packages.${system}.default;
+        zig = inputs.zig-overlay.packages.${system}."0.16.0";
 
       in {
         devShells.default = pkgs.mkShell {
